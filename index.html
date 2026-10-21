@@ -527,7 +527,7 @@ async function postJSON(body) {
 
 // Sends a submission, retrying while the server is busy (e.g. everyone auto-submitting at once).
 async function sendSubmission(payload, say) {
-  const waits = [0, 5, 10, 20, 30, 30, 45, 60];   // seconds before each attempt
+  const waits = [0, 5, 10, 15, 20, 30, 30, 30, 45, 45, 60, 60];   // seconds before each attempt (~7 min total)
   let last = "";
   for (let i = 0; i < waits.length; i++) {
     if (waits[i]) { say(`Not sent yet (${last}). Retrying in ${waits[i]} s… (attempt ${i + 1} of ${waits.length})`); await sleep(waits[i] * 1000); }

@@ -46,6 +46,12 @@
   .toolbar .spacer { flex: 1; }
   .cell { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
   .cell.running { border-color: var(--accent); }
+  .cell.ok { border-left: 5px solid var(--ok); }
+  .cell.err { border-left: 5px solid var(--err); }
+  .cell-head .status { font-size: 13px; font-weight: 600; }
+  .cell-head .status.ok { color: var(--ok); }
+  .cell-head .status.err { color: var(--err); }
+  .cell-head .status.run { color: var(--accent); }
   .cell-head { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); background: #fafbfc; }
   .cell-head .count { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--muted); flex: 1; }
   .cell-head button { padding: 3px 10px; font-size: 13px; }
@@ -244,7 +250,7 @@ pyReady = (async () => {
 function addCell(code = "", output = "", isError = false, count = null) {
   const el = document.createElement("div");
   el.className = "cell";
-  el.innerHTML = `<div class="cell-head"><span class="count"></span>
+  el.innerHTML = `<div class="cell-head"><span class="count"></span><span class="status"></span>
     <button class="run">▶ Run</button><button class="del danger" title="Delete cell">✕</button></div>
     <div class="ed"></div><pre class="output"></pre>`;
   $("cells").appendChild(el);
@@ -255,7 +261,7 @@ function addCell(code = "", output = "", isError = false, count = null) {
       Tab: c => c.somethingSelected() ? c.indentSelection("add") : c.replaceSelection("    "),
     },
   });
-  const cell = { cm, el, outEl: el.querySelector(".output"), countEl: el.querySelector(".count"), output, isError, count };
+  const cell = { cm, el, outEl: el.querySelector(".output"), countEl: el.querySelector(".count"), statusEl: el.querySelector(".status"), output, isError, count };
   renderCell(cell);
   el.querySelector(".run").onclick = () => runCells([cell]);
   el.querySelector(".del").onclick = () => {
@@ -271,6 +277,11 @@ function renderCell(c) {
   c.countEl.textContent = `In [${c.count ?? " "}]:`;
   c.outEl.textContent = c.output || "";
   c.outEl.classList.toggle("error", !!c.isError);
+  const state = c.count == null ? "" : c.isError ? "err" : "ok";
+  c.el.classList.toggle("ok", state === "ok");
+  c.el.classList.toggle("err", state === "err");
+  c.statusEl.className = "status " + state;
+  c.statusEl.textContent = state === "ok" ? "✓ Ran without errors" : state === "err" ? "✗ Error" : "";
 }
 
 let running = false;
@@ -280,9 +291,13 @@ async function runCells(list, restart = false) {
   setButtonsDisabled(true);
   try {
     if (!runCell) { setPyStatus("Still loading Python, please wait…"); await pyReady; }
-    if (restart) { pyodide.globals.get("_reset_ns")(); execCounter = 0; }
+    if (restart) {
+      pyodide.globals.get("_reset_ns")(); execCounter = 0;
+      cells.forEach(c => { c.count = null; c.output = ""; c.isError = false; renderCell(c); });
+    }
     for (const c of list) {
-      c.el.classList.add("running");
+      c.el.classList.remove("ok", "err"); c.el.classList.add("running");
+      c.statusEl.className = "status run"; c.statusEl.textContent = "Running…";
       c.output = ""; c.isError = false; c.countEl.textContent = "In [*]:"; c.outEl.textContent = "";
       await new Promise(r => setTimeout(r, 30));     // let the browser repaint before blocking
       currentOut = [];

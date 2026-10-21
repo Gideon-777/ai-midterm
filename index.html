@@ -13,7 +13,7 @@
     --bg: #f5f6f8; --panel: #ffffff; --ink: #1d2330; --muted: #667085;
     --line: #d9dde5; --accent: #1f5fbf; --accent-ink: #ffffff;
     --ok: #157f3b; --err: #b42318; --warn-bg: #fff4d6; --warn-ink: #7a4b00;
-    --out-bg: #f8f9fb;
+    --out-bg: #f8f9fb; --extra: #b54708;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
@@ -27,6 +27,11 @@
   #pystatus { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--warn-bg); color: var(--warn-ink); }
   #pystatus.ready { background: #e3f4e8; color: var(--ok); }
   #pystatus.failed { background: #fde7e6; color: var(--err); }
+  .timer { font: 600 15px/1 ui-monospace, Consolas, monospace; padding: 7px 12px; border-radius: 8px;
+    background: #e8eefa; color: var(--accent); white-space: nowrap; }
+  .timer.extra { background: #fef0e3; color: var(--extra); }
+  .timer.final { background: #fde7e6; color: var(--err); }
+  .timer.over { background: #fde7e6; color: var(--err); }
   main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 80px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
   .login { max-width: 440px; margin: 60px auto; }
@@ -76,6 +81,7 @@
 <header>
   <h1>AI Programming (CB2001103) · Midterm Exercise 4</h1>
   <span id="who"></span>
+  <span id="timer" class="timer">Syncing clock…</span>
   <span id="pystatus">Loading Python…</span>
 </header>
 
@@ -83,7 +89,9 @@
   <!-- Step 1: identify -->
   <section id="loginView" class="card login">
     <h2>Before you start</h2>
-    <p class="note">Enter your Student ID and full name. You can submit <b>only once</b>.</p>
+    <p id="schedule" class="note"></p>
+    <p class="note">Enter your Student ID and full name. You can submit <b>only once</b>.
+      Work that is not submitted by the deadline is <b>submitted automatically</b>.</p>
     <label for="sid">Student ID</label>
     <input id="sid" type="text" autocomplete="off">
     <label for="sname">Full name</label>
@@ -95,8 +103,9 @@
   <!-- Step 2: notebook -->
   <section id="examView" class="hidden">
     <div id="configBanner" class="banner hidden">Submission server is not configured yet (SUBMIT_URL is empty). Ask the teacher.</div>
+    <div id="demoBanner" class="banner hidden">DEMO MODE: test exam with a short timer. Submissions are marked “demo”.</div>
     <p class="note">The dataset <code>houses.csv</code> is already loaded, so <code>pd.read_csv("houses.csv")</code> works as is.
-      Run a cell with <b>Shift+Enter</b>. Your work is saved automatically in this browser.</p>
+      Run a cell with <b>Shift+Enter</b>. Your work is saved automatically, and submitted automatically when time is up.</p>
     <div class="toolbar">
       <button id="runAllBtn">Run all</button>
       <button id="restartBtn">Restart &amp; run all</button>
@@ -138,11 +147,26 @@
   </div>
 </div>
 
+<div id="timeupModal" class="modal-bg hidden">
+  <div class="card modal">
+    <h3 style="margin-top:0">Time is up</h3>
+    <p>Your work is locked and is being submitted automatically. <b>Do not close this page.</b></p>
+    <p id="timeupMsg" class="note"></p>
+    <div class="actions"><button id="timeupRetry" class="primary hidden">Try again</button></div>
+  </div>
+</div>
+
 <script>
 // ===================== CONFIG (teacher) =====================
 // Paste the Google Apps Script Web App URL here (ends with /exec).
 const SUBMIT_URL = "https://script.google.com/macros/s/AKfycbx1lDcXHRR4L_I6mOC6zUWRmxD7hLBo87n-JBCm95duYQIJ8eePZ_RgIMO6m_Lr_g/exec";
 const EXAM_KEY = "midterm-cb2001103-ex4";   // storage namespace; change it to reset all browsers
+// Exam times in KST. DEADLINE must match DEADLINE in Code.gs.
+const EXAM_START   = "2026-10-22T09:00:00+09:00";
+const OFFICIAL_END = "2026-10-22T10:00:00+09:00";
+const DEADLINE     = "2026-10-22T10:30:00+09:00";   // auto-submit happens here
+const SERVER_SAVE_MINUTES = 2;                      // draft copy to the Google Sheet
+// Teacher test run: open the site with ?demo=4 for an exam that starts now and ends in 4 minutes.
 // ============================================================
 
 const STARTER_CELLS = [
@@ -210,10 +234,12 @@ def _run_cell(src, n):
 `;
 
 const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 let pyodide = null, pyReady = null, runCell = null;
 let student = null;            // {id, name, startedAt}
-let cells = [];                // {cm, outEl, countEl, el, output, isError, count}
+let cells = [];                // {cm, outEl, countEl, statusEl, el, output, isError, count}
 let execCounter = 0, currentOut = null, runCount = 0;
+let frozen = false, finishing = false, submitted = false;
 
 const sessionKey = `${EXAM_KEY}:session`;
 const draftKey = id => `${EXAM_KEY}:draft:${id}`;
@@ -221,7 +247,58 @@ const doneKey = id => `${EXAM_KEY}:submitted:${id}`;
 const store = {
   get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem(k); } catch {} },
 };
+
+// ---------- Clock & schedule ----------
+// The countdown uses the Google server's clock, so a wrong laptop clock does not matter.
+const demoMin = Number(new URLSearchParams(location.search).get("demo")) || 0;
+const T = demoMin
+  ? { start: Date.now(), end: Date.now() + demoMin * 30e3, deadline: Date.now() + demoMin * 60e3 }
+  : { start: Date.parse(EXAM_START), end: Date.parse(OFFICIAL_END), deadline: Date.parse(DEADLINE) };
+let clockOffset = 0, serverHasDrafts = false;
+const now = () => Date.now() + clockOffset;
+
+async function syncClock() {
+  if (!SUBMIT_URL) return;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const t0 = Date.now();
+      const r = await (await fetch(`${SUBMIT_URL}?action=time`)).json();
+      if (r.serverTime) {
+        serverHasDrafts = true;   // only the updated Code.gs answers with serverTime
+        if (!demoMin) clockOffset = r.serverTime - (t0 + Date.now()) / 2;
+      }
+      return;
+    } catch {}
+    await sleep(1000);
+  }
+}
+
+const phase = (t = now()) => t < T.start ? "before" : t < T.end ? "exam" : t < T.deadline ? "extra" : "over";
+const pad = n => String(n).padStart(2, "0");
+function fmtLeft(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${pad(m)}:${pad(s % 60)}`;
+}
+const fmtKST = ms => new Date(ms).toLocaleTimeString("en-GB", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit" });
+
+function tick() {
+  const t = now(), p = phase(t), el = $("timer");
+  let text, cls = "timer";
+  if (p === "before") text = `Starts in ${fmtLeft(T.start - t)}`;
+  else if (p === "exam") text = `Time left ${fmtLeft(T.end - t)}`;
+  else if (p === "extra") { text = `Extra time ${fmtLeft(T.deadline - t)} · submit before ${fmtKST(T.deadline)}`; cls += " extra"; }
+  else { text = "Time is up"; cls += " over"; }
+  if (p === "exam" || p === "extra") { if (T.deadline - t <= 5 * 60e3) cls += " final"; }
+  el.textContent = text; el.className = cls;
+  if (student && !submitted && p === "over") timeUp();
+}
+
+$("schedule").textContent = demoMin
+  ? `DEMO MODE: the exam ends in ${demoMin} minutes.`
+  : `Exam: ${new Date(T.start).toLocaleDateString("en-GB", { timeZone: "Asia/Seoul", weekday: "long", day: "numeric", month: "long" })}, ` +
+    `${fmtKST(T.start)}–${fmtKST(T.end)} KST, extra time until ${fmtKST(T.deadline)}.`;
 
 // ---------- Python ----------
 function setPyStatus(text, cls) { const el = $("pystatus"); el.textContent = text; el.className = cls || ""; }
@@ -265,6 +342,7 @@ function addCell(code = "", output = "", isError = false, count = null) {
   renderCell(cell);
   el.querySelector(".run").onclick = () => runCells([cell]);
   el.querySelector(".del").onclick = () => {
+    if (frozen) return;
     if (cm.getValue().trim() && !window.confirm("Delete this cell?")) return;
     cells = cells.filter(c => c !== cell); el.remove(); saveDraft();
   };
@@ -286,7 +364,7 @@ function renderCell(c) {
 
 let running = false;
 async function runCells(list, restart = false) {
-  if (running) return;
+  if (running || frozen) return;
   running = true;
   setButtonsDisabled(true);
   try {
@@ -299,7 +377,7 @@ async function runCells(list, restart = false) {
       c.el.classList.remove("ok", "err"); c.el.classList.add("running");
       c.statusEl.className = "status run"; c.statusEl.textContent = "Running…";
       c.output = ""; c.isError = false; c.countEl.textContent = "In [*]:"; c.outEl.textContent = "";
-      await new Promise(r => setTimeout(r, 30));     // let the browser repaint before blocking
+      await sleep(30);                                 // let the browser repaint before blocking
       currentOut = [];
       const ok = runCell(c.cm.getValue(), ++execCounter);
       c.output = currentOut.join(""); currentOut = null;
@@ -316,11 +394,16 @@ async function runCells(list, restart = false) {
 }
 
 function setButtonsDisabled(d) {
-  document.querySelectorAll(".cell .run, #runAllBtn, #restartBtn, #submitBtn").forEach(b => b.disabled = d);
+  document.querySelectorAll(".cell .run, .cell .del, #runAllBtn, #restartBtn, #submitBtn, #addCellBtn")
+    .forEach(b => b.disabled = d || frozen);
 }
 
-// ---------- Draft autosave ----------
-let saveTimer = null;
+// ---------- Autosave: browser (always) + Google Sheet draft (every few minutes) ----------
+let saveTimer = null, serverDirty = false, browserSavedAt = "", serverSavedAt = "";
+function showSaveState() {
+  $("saveState").textContent = [browserSavedAt && `Saved in browser ${browserSavedAt}`, serverSavedAt && `on server ${serverSavedAt}`]
+    .filter(Boolean).join(" · ");
+}
 function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveDraft, 600); $("saveState").textContent = "Saving…"; }
 function saveDraft() {
   if (!student) return;
@@ -328,7 +411,21 @@ function saveDraft() {
     cells: cells.map(c => ({ code: c.cm.getValue(), output: c.output, isError: c.isError, count: c.count })),
     answer: $("answer").value, runCount,
   });
-  $("saveState").textContent = "Saved in this browser " + new Date().toLocaleTimeString();
+  serverDirty = true;
+  browserSavedAt = new Date().toLocaleTimeString();
+  showSaveState();
+}
+
+async function uploadDraft() {
+  if (!SUBMIT_URL || !serverHasDrafts || !student || submitted || finishing || !serverDirty) return;
+  serverDirty = false;
+  try {
+    const p = buildPayload("DRAFT");
+    delete p.fileText; p.action = "draft";
+    const res = await postJSON(p);
+    if (!res.ok) throw new Error(res.error);
+    serverSavedAt = new Date().toLocaleTimeString(); showSaveState();
+  } catch { serverDirty = true; }
 }
 
 // ---------- Login ----------
@@ -344,15 +441,19 @@ async function checkServer(id) {
 
 async function start() {
   const id = normId($("sid").value), name = $("sname").value.trim().replace(/\s+/g, " ");
-  if (!/^[A-Z0-9-]{3,20}$/.test(id)) return $("loginMsg").textContent = "Enter a valid Student ID (letters/digits only).";
-  if (name.length < 2) return $("loginMsg").textContent = "Enter your full name.";
-  $("startBtn").disabled = true; $("loginMsg").textContent = "";
+  const say = t => $("loginMsg").textContent = t;
+  if (!/^[A-Z0-9-]{3,20}$/.test(id)) return say("Enter a valid Student ID (letters/digits only).");
+  if (name.length < 2) return say("Enter your full name.");
+  const p = phase();
+  if (p === "before") return say(`The exam opens at ${fmtKST(T.start)} KST.`);
+  if (p === "over" && !store.get(draftKey(id))) return say("The exam is closed.");
+  $("startBtn").disabled = true; say("");
   const local = store.get(doneKey(id));
   if (local) return showLocked(local);
   const res = await checkServer(id);
   $("startBtn").disabled = false;
   if (res.ok && res.submitted) return showLocked({ id, already: true, receivedAt: res.receivedAt });
-  student = { id, name, startedAt: (store.get(sessionKey)?.id === id && store.get(sessionKey).startedAt) || new Date().toISOString() };
+  student = { id, name, startedAt: (store.get(sessionKey)?.id === id && store.get(sessionKey).startedAt) || new Date(now()).toISOString() };
   store.set(sessionKey, student);
   openExam();
 }
@@ -362,6 +463,7 @@ function openExam() {
   $("examView").classList.remove("hidden");
   $("who").textContent = `${student.name} · ${student.id}`;
   $("configBanner").classList.toggle("hidden", !!SUBMIT_URL);
+  $("demoBanner").classList.toggle("hidden", !demoMin);
   const draft = store.get(draftKey(student.id));
   $("cells").innerHTML = ""; cells = [];
   if (draft && draft.cells && draft.cells.length) {
@@ -373,22 +475,24 @@ function openExam() {
     STARTER_CELLS.forEach(code => addCell(code));
   }
   cells.forEach(c => c.cm.refresh());
+  serverDirty = true;
+  tick();
 }
 
 function showLocked(info) {
   ["loginView", "examView"].forEach(v => $(v).classList.add("hidden"));
+  ["confirmModal", "timeupModal"].forEach(v => $(v).classList.add("hidden"));
   $("lockedView").classList.remove("hidden");
-  $("confirmModal").classList.add("hidden");
   $("lockedTitle").textContent = info.already ? "Already submitted" : "Submission received";
   const when = info.receivedAt ? new Date(info.receivedAt).toLocaleString() : "";
   $("lockedText").textContent = info.already
     ? `Student ID ${info.id} has already submitted${when ? " (" + when + ")" : ""}. Resubmission is not allowed.`
-    : `Thank you. Your exam (Student ID ${info.id}) was received at ${when}. You may close this page.`;
+    : `Thank you. Your exam (Student ID ${info.id}) was ${info.auto ? "submitted automatically and " : ""}received at ${when}. You may close this page.`;
   $("who").textContent = info.id || "";
 }
 
 // ---------- Submit ----------
-function buildPayload() {
+function buildPayload(type) {
   const parts = cells.map((c, i) => ({ i: i + 1, code: c.cm.getValue(), out: c.output || "(cell not run)" }));
   const code = parts.map(p => `# ===== Cell ${p.i} =====\n${p.code}`).join("\n\n");
   const output = parts.map(p => `===== Cell ${p.i} =====\n${p.out}`).join("\n");
@@ -398,7 +502,7 @@ function buildPayload() {
 AI Programming (CB2001103) - Midterm Exercise 4
 Student name: ${student.name}
 Student ID: ${student.id}
-Submitted from the online exam platform: ${new Date().toISOString()}
+Submission: ${type}${demoMin ? " (demo)" : ""}, ${new Date(now()).toISOString()}
 """
 
 ${parts.map(p => `# ===== Cell ${p.i} =====\n${p.code}\n\n# ----- output of cell ${p.i} (last run) -----\n${comment(p.out.trimEnd())}`).join("\n\n\n")}
@@ -409,9 +513,41 @@ ${comment($("answer").value.trim())}
 `;
   return {
     studentId: student.id, name: student.name, startedAt: student.startedAt,
+    type: type + (demoMin ? " (demo)" : ""),
     code, output, writtenAnswer: $("answer").value.trim(), fileText, runCount,
     userAgent: navigator.userAgent,
   };
+}
+
+async function postJSON(body) {
+  // text/plain avoids a CORS preflight, which Apps Script does not support
+  const r = await fetch(SUBMIT_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(body) });
+  return r.json();
+}
+
+// Sends a submission, retrying while the server is busy (e.g. everyone auto-submitting at once).
+async function sendSubmission(payload, say) {
+  const waits = [0, 5, 10, 20, 30, 30, 45, 60];   // seconds before each attempt
+  let last = "";
+  for (let i = 0; i < waits.length; i++) {
+    if (waits[i]) { say(`Not sent yet (${last}). Retrying in ${waits[i]} s… (attempt ${i + 1} of ${waits.length})`); await sleep(waits[i] * 1000); }
+    say(i ? `Submitting… (attempt ${i + 1})` : "Submitting…");
+    let res;
+    try { res = await postJSON(payload); } catch (e) { res = { ok: false, error: "network", message: e.message }; }
+    if (res.ok) return finishSubmitted({ id: student.id, receivedAt: res.receivedAt, auto: payload.type.startsWith("AUTO") });
+    if (res.error === "already_submitted") return finishSubmitted({ id: student.id, already: true, receivedAt: res.receivedAt });
+    if (res.error === "closed" || res.error === "missing_fields") return { ok: false, message: res.message || res.error };
+    last = res.message || res.error || "no answer";
+  }
+  return { ok: false, message: "Could not reach the server" };
+}
+
+function finishSubmitted(info) {
+  submitted = true;
+  store.set(doneKey(student.id), info);
+  store.del(sessionKey);
+  showLocked(info);
+  return { ok: true };
 }
 
 function openConfirm() {
@@ -421,7 +557,7 @@ function openConfirm() {
   if (!$("answer").value.trim()) warn.push("Your written answer is empty.");
   $("confirmWarn").textContent = warn.join(" ");
   $("submitMsg").textContent = "";
-  $("confirmSubmit").disabled = false;
+  $("confirmSubmit").disabled = false; $("cancelSubmit").disabled = false;
   $("confirmModal").classList.remove("hidden");
 }
 
@@ -429,30 +565,40 @@ async function doSubmit() {
   if (!SUBMIT_URL) return $("submitMsg").textContent = "Submission server is not configured. Tell the teacher.";
   saveDraft();
   $("confirmSubmit").disabled = true; $("cancelSubmit").disabled = true;
-  $("submitMsg").style.color = "var(--muted)"; $("submitMsg").textContent = "Submitting…";
-  try {
-    // text/plain avoids a CORS preflight, which Apps Script does not support
-    const r = await fetch(SUBMIT_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(buildPayload()) });
-    const res = await r.json();
-    if (res.ok) {
-      const info = { id: student.id, receivedAt: res.receivedAt };
-      store.set(doneKey(student.id), info);
-      localStorage.removeItem(sessionKey);
-      return showLocked(info);
-    }
-    if (res.error === "already_submitted") {
-      const info = { id: student.id, already: true, receivedAt: res.receivedAt };
-      store.set(doneKey(student.id), info);
-      return showLocked(info);
-    }
-    throw new Error(res.message || res.error || "Unknown error");
-  } catch (e) {
-    $("submitMsg").style.color = "var(--err)";
-    $("submitMsg").textContent = "Submission failed: " + e.message + ". Your work is saved; try again or call the teacher.";
-    $("confirmSubmit").disabled = false;
-  } finally {
-    $("cancelSubmit").disabled = false;
-  }
+  const m = $("submitMsg");
+  m.style.color = "var(--muted)";
+  const res = await sendSubmission(buildPayload("MANUAL"), t => m.textContent = t);
+  if (res.ok || finishing) return;
+  m.style.color = "var(--err)";
+  m.textContent = `Submission failed: ${res.message}. Your work is saved; try again or call the teacher.`;
+  $("confirmSubmit").disabled = false; $("cancelSubmit").disabled = false;
+}
+
+// At the deadline: lock everything, then auto-submit the frozen work.
+// A random delay spreads 60 simultaneous submissions over ~90 s so the server is not flooded.
+let autoPayload = null;
+async function timeUp() {
+  if (finishing) return;
+  finishing = true; frozen = true;
+  saveDraft();
+  cells.forEach(c => c.cm.setOption("readOnly", "nocursor"));
+  $("answer").readOnly = true;
+  setButtonsDisabled(true);
+  $("confirmModal").classList.add("hidden");
+  $("timeupModal").classList.remove("hidden");
+  autoPayload = buildPayload("AUTO");
+  if (!SUBMIT_URL) return $("timeupMsg").textContent = "Submission server is not configured. Call the teacher.";
+  $("timeupMsg").textContent = "Preparing submission…";
+  await sleep(demoMin ? 2000 : Math.random() * 90e3);
+  autoSubmit();
+}
+
+async function autoSubmit() {
+  $("timeupRetry").classList.add("hidden");
+  const res = await sendSubmission(autoPayload, t => $("timeupMsg").textContent = t);
+  if (res.ok) return;
+  $("timeupMsg").textContent = `Automatic submission failed: ${res.message}. Your work is saved in this browser. Click “Try again” or call the teacher.`;
+  $("timeupRetry").classList.remove("hidden");
 }
 
 // ---------- Wiring ----------
@@ -460,16 +606,22 @@ $("startBtn").onclick = start;
 $("sname").addEventListener("keydown", e => { if (e.key === "Enter") start(); });
 $("runAllBtn").onclick = () => runCells(cells.slice());
 $("restartBtn").onclick = () => runCells(cells.slice(), true);
-$("addCellBtn").onclick = () => { const c = addCell(); c.cm.focus(); saveDraft(); };
+$("addCellBtn").onclick = () => { if (frozen) return; const c = addCell(); c.cm.focus(); saveDraft(); };
 $("answer").addEventListener("input", scheduleSave);
-$("submitBtn").onclick = openConfirm;
+$("submitBtn").onclick = () => { if (!frozen) openConfirm(); };
 $("cancelSubmit").onclick = () => $("confirmModal").classList.add("hidden");
 $("confirmSubmit").onclick = doSubmit;
+$("timeupRetry").onclick = autoSubmit;
 
-// Resume an open session after a refresh
-(() => {
+(async () => {
+  await syncClock();
+  // Resume an open session after a refresh
   const s = store.get(sessionKey);
   if (s && s.id && !store.get(doneKey(s.id))) { student = s; openExam(); }
+  tick();
+  setInterval(tick, 1000);
+  // Start server autosave at a random offset so 60 laptops don't all save in the same second
+  setTimeout(() => { uploadDraft(); setInterval(uploadDraft, SERVER_SAVE_MINUTES * 60e3); }, Math.random() * 60e3);
 })();
 </script>
 </body>

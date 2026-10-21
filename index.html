@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Programming Midterm</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --ink: #1d2330; --muted: #667085;
+    --line: #d9dde5; --accent: #1f5fbf; --accent-ink: #ffffff;
+    --ok: #157f3b; --err: #b42318; --warn-bg: #fff4d6; --warn-ink: #7a4b00;
+    --out-bg: #f8f9fb;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .hidden { display: none !important; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line);
+    padding: 10px 20px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 16px; margin: 0; flex: 1; min-width: 200px; }
+  #who { color: var(--muted); font-size: 14px; }
+  #pystatus { font-size: 13px; padding: 3px 10px; border-radius: 999px; background: var(--warn-bg); color: var(--warn-ink); }
+  #pystatus.ready { background: #e3f4e8; color: var(--ok); }
+  #pystatus.failed { background: #fde7e6; color: var(--err); }
+  main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 80px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
+  .login { max-width: 440px; margin: 60px auto; }
+  .login h2, .locked h2 { margin-top: 0; }
+  label { display: block; font-weight: 600; margin: 14px 0 4px; }
+  input[type=text] { width: 100%; padding: 9px 11px; font: inherit; border: 1px solid var(--line); border-radius: 8px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 8px; padding: 6px 14px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.danger { color: var(--err); }
+  .msg { margin-top: 12px; font-size: 14px; color: var(--err); min-height: 1.5em; }
+  .note { color: var(--muted); font-size: 14px; }
+  .banner { background: var(--warn-bg); color: var(--warn-ink); padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; align-items: center; }
+  .toolbar .spacer { flex: 1; }
+  .cell { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
+  .cell.running { border-color: var(--accent); }
+  .cell-head { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); background: #fafbfc; }
+  .cell-head .count { font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--muted); flex: 1; }
+  .cell-head button { padding: 3px 10px; font-size: 13px; }
+  .CodeMirror { height: auto; font-size: 14px; font-family: ui-monospace, Consolas, "Courier New", monospace; }
+  .CodeMirror-scroll { min-height: 60px; }
+  pre.output { margin: 0; padding: 10px 14px; background: var(--out-bg); border-top: 1px solid var(--line);
+    font: 13px/1.45 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word;
+    max-height: 420px; overflow: auto; }
+  pre.output:empty { display: none; }
+  pre.output.error { color: var(--err); }
+  textarea#answer { width: 100%; min-height: 150px; font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+  .submit-row { margin-top: 24px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(15, 20, 30, .45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+  .modal { max-width: 460px; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+  .locked { max-width: 560px; margin: 60px auto; text-align: center; }
+  .locked .big { font-size: 42px; color: var(--ok); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AI Programming (CB2001103) · Midterm Exercise 4</h1>
+  <span id="who"></span>
+  <span id="pystatus">Loading Python…</span>
+</header>
+
+<main>
+  <!-- Step 1: identify -->
+  <section id="loginView" class="card login">
+    <h2>Before you start</h2>
+    <p class="note">Enter your Student ID and full name. You can submit <b>only once</b>.</p>
+    <label for="sid">Student ID</label>
+    <input id="sid" type="text" autocomplete="off">
+    <label for="sname">Full name</label>
+    <input id="sname" type="text" autocomplete="off">
+    <div style="margin-top:18px"><button id="startBtn" class="primary">Start exam</button></div>
+    <div id="loginMsg" class="msg"></div>
+  </section>
+
+  <!-- Step 2: notebook -->
+  <section id="examView" class="hidden">
+    <div id="configBanner" class="banner hidden">Submission server is not configured yet (SUBMIT_URL is empty). Ask the teacher.</div>
+    <p class="note">The dataset <code>houses.csv</code> is already loaded, so <code>pd.read_csv("houses.csv")</code> works as is.
+      Run a cell with <b>Shift+Enter</b>. Your work is saved automatically in this browser.</p>
+    <div class="toolbar">
+      <button id="runAllBtn">Run all</button>
+      <button id="restartBtn">Restart &amp; run all</button>
+      <span class="spacer"></span>
+      <span id="saveState" class="note"></span>
+    </div>
+    <div id="cells"></div>
+    <button id="addCellBtn">+ Add cell</button>
+
+    <div class="card" style="margin-top:24px">
+      <label for="answer" style="margin-top:0">Written answer (4 to 6 sentences)</label>
+      <textarea id="answer"></textarea>
+    </div>
+
+    <div class="submit-row">
+      <button id="submitBtn" class="primary">Submit exam</button>
+      <span class="note">The output of each cell's last run is submitted with your code. Use “Run all” before submitting.</span>
+    </div>
+  </section>
+
+  <!-- Step 3: done -->
+  <section id="lockedView" class="card locked hidden">
+    <div class="big">✓</div>
+    <h2 id="lockedTitle">Submission received</h2>
+    <p id="lockedText" class="note"></p>
+  </section>
+</main>
+
+<div id="confirmModal" class="modal-bg hidden">
+  <div class="card modal">
+    <h3 style="margin-top:0">Submit your exam?</h3>
+    <p>You can submit <b>only once</b>. After submitting you cannot change your answers.</p>
+    <p id="confirmWarn" class="note"></p>
+    <div class="actions">
+      <button id="cancelSubmit">Go back</button>
+      <button id="confirmSubmit" class="primary">Yes, submit</button>
+    </div>
+    <div id="submitMsg" class="msg"></div>
+  </div>
+</div>
+
+<script>
+// ===================== CONFIG (teacher) =====================
+// Paste the Google Apps Script Web App URL here (ends with /exec).
+const SUBMIT_URL = "";
+const EXAM_KEY = "midterm-cb2001103-ex4";   // storage namespace; change it to reset all browsers
+// ============================================================
+
+const STARTER_CELLS = [
+`import pandas as pd
+import numpy as np
+
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.linear_model import LinearRegression
+from sklearn.cluster import KMeans
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score`,
+`# ----------------------------------------------------------- Task 1 (6 points)
+# Load houses.csv and print the shape, the missing values per column,
+# the average price, and the average price per district.
+`,
+`# ----------------------------------------------------------- Task 2 (6 points)
+# Build y and X, then split 75 / 25 with random_state=42.
+`,
+`# ---------------------------------------------------------- Task 3 (10 points)
+# One Pipeline: median imputer + scaler on the numeric columns, one-hot encoder
+# on the text columns, LinearRegression(). Fit, predict, print MAE, RMSE, R2,
+# and the RMSE of always predicting the training mean.
+`,
+`# ----------------------------------------------------------- Task 4 (8 points)
+# Scale size_m2 and price, fit KMeans(n_clusters=3, random_state=42), store the
+# labels in df["segment"], print the average size and price of each segment.
+`,
+];
+
+// Runs a cell like Jupyter: shared namespace, last expression is displayed.
+const PY_RUNNER = `
+import ast, sys, traceback, linecache, warnings
+warnings.filterwarnings("ignore", message=r"(?s).*[Pp]yarrow")
+_ns = {"__name__": "__main__"}
+
+def _reset_ns():
+    _ns.clear()
+    _ns["__name__"] = "__main__"
+
+def _run_cell(src, n):
+    fname = f"<cell {n}>"
+    linecache.cache[fname] = (len(src), None, src.splitlines(True), fname)
+    try:
+        tree = ast.parse(src, fname)
+    except SyntaxError:
+        print("".join(traceback.format_exception_only(*sys.exc_info()[:2])), end="")
+        return False
+    last = None
+    if tree.body and isinstance(tree.body[-1], ast.Expr):
+        last = ast.Expression(tree.body.pop().value)
+    try:
+        exec(compile(tree, fname, "exec"), _ns)
+        if last is not None:
+            value = eval(compile(last, fname, "eval"), _ns)
+            if value is not None:
+                print(repr(value))
+        return True
+    except BaseException:
+        et, ev, tb = sys.exc_info()
+        print("".join(traceback.format_exception(et, ev, tb.tb_next)), end="")
+        return False
+`;
+
+const $ = id => document.getElementById(id);
+let pyodide = null, pyReady = null, runCell = null;
+let student = null;            // {id, name, startedAt}
+let cells = [];                // {cm, outEl, countEl, el, output, isError, count}
+let execCounter = 0, currentOut = null, runCount = 0;
+
+const sessionKey = `${EXAM_KEY}:session`;
+const draftKey = id => `${EXAM_KEY}:draft:${id}`;
+const doneKey = id => `${EXAM_KEY}:submitted:${id}`;
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+};
+
+// ---------- Python ----------
+function setPyStatus(text, cls) { const el = $("pystatus"); el.textContent = text; el.className = cls || ""; }
+
+pyReady = (async () => {
+  try {
+    pyodide = await loadPyodide();
+    setPyStatus("Loading pandas / scikit-learn…");
+    await pyodide.loadPackage(["pandas", "numpy", "scikit-learn"]);
+    const csv = await (await fetch("houses.csv", { cache: "no-store" })).text();
+    pyodide.FS.writeFile("houses.csv", csv);
+    const write = s => { if (currentOut !== null) currentOut.push(s); };
+    pyodide.setStdout({ batched: s => write(s + "\n") });
+    pyodide.setStderr({ batched: s => write(s + "\n") });
+    pyodide.runPython(PY_RUNNER);
+    runCell = pyodide.globals.get("_run_cell");
+    setPyStatus("Python ready", "ready");
+  } catch (e) {
+    console.error(e);
+    setPyStatus("Python failed to load: reload the page", "failed");
+    throw e;
+  }
+})();
+
+// ---------- Cells ----------
+function addCell(code = "", output = "", isError = false, count = null) {
+  const el = document.createElement("div");
+  el.className = "cell";
+  el.innerHTML = `<div class="cell-head"><span class="count"></span>
+    <button class="run">▶ Run</button><button class="del danger" title="Delete cell">✕</button></div>
+    <div class="ed"></div><pre class="output"></pre>`;
+  $("cells").appendChild(el);
+  const cm = CodeMirror(el.querySelector(".ed"), {
+    value: code, mode: "python", lineNumbers: true, indentUnit: 4,
+    viewportMargin: Infinity, extraKeys: {
+      "Shift-Enter": () => runCells([cell]),
+      Tab: c => c.somethingSelected() ? c.indentSelection("add") : c.replaceSelection("    "),
+    },
+  });
+  const cell = { cm, el, outEl: el.querySelector(".output"), countEl: el.querySelector(".count"), output, isError, count };
+  renderCell(cell);
+  el.querySelector(".run").onclick = () => runCells([cell]);
+  el.querySelector(".del").onclick = () => {
+    if (cm.getValue().trim() && !window.confirm("Delete this cell?")) return;
+    cells = cells.filter(c => c !== cell); el.remove(); saveDraft();
+  };
+  cm.on("change", scheduleSave);
+  cells.push(cell);
+  return cell;
+}
+
+function renderCell(c) {
+  c.countEl.textContent = `In [${c.count ?? " "}]:`;
+  c.outEl.textContent = c.output || "";
+  c.outEl.classList.toggle("error", !!c.isError);
+}
+
+let running = false;
+async function runCells(list, restart = false) {
+  if (running) return;
+  running = true;
+  setButtonsDisabled(true);
+  try {
+    if (!runCell) { setPyStatus("Still loading Python, please wait…"); await pyReady; }
+    if (restart) { pyodide.globals.get("_reset_ns")(); execCounter = 0; }
+    for (const c of list) {
+      c.el.classList.add("running");
+      c.output = ""; c.isError = false; c.countEl.textContent = "In [*]:"; c.outEl.textContent = "";
+      await new Promise(r => setTimeout(r, 30));     // let the browser repaint before blocking
+      currentOut = [];
+      const ok = runCell(c.cm.getValue(), ++execCounter);
+      c.output = currentOut.join(""); currentOut = null;
+      c.isError = !ok; c.count = execCounter; runCount++;
+      c.el.classList.remove("running");
+      renderCell(c);
+      if (!ok && list.length > 1) break;              // stop "run all" on first error
+    }
+  } catch (e) {
+    console.error(e);
+  } finally {
+    running = false; setButtonsDisabled(false); saveDraft();
+  }
+}
+
+function setButtonsDisabled(d) {
+  document.querySelectorAll(".cell .run, #runAllBtn, #restartBtn, #submitBtn").forEach(b => b.disabled = d);
+}
+
+// ---------- Draft autosave ----------
+let saveTimer = null;
+function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveDraft, 600); $("saveState").textContent = "Saving…"; }
+function saveDraft() {
+  if (!student) return;
+  store.set(draftKey(student.id), {
+    cells: cells.map(c => ({ code: c.cm.getValue(), output: c.output, isError: c.isError, count: c.count })),
+    answer: $("answer").value, runCount,
+  });
+  $("saveState").textContent = "Saved in this browser " + new Date().toLocaleTimeString();
+}
+
+// ---------- Login ----------
+const normId = s => String(s || "").trim().toUpperCase();
+
+async function checkServer(id) {
+  if (!SUBMIT_URL) return { ok: false };
+  try {
+    const r = await fetch(`${SUBMIT_URL}?action=check&id=${encodeURIComponent(id)}`);
+    return await r.json();
+  } catch { return { ok: false }; }
+}
+
+async function start() {
+  const id = normId($("sid").value), name = $("sname").value.trim().replace(/\s+/g, " ");
+  if (!/^[A-Z0-9-]{3,20}$/.test(id)) return $("loginMsg").textContent = "Enter a valid Student ID (letters/digits only).";
+  if (name.length < 2) return $("loginMsg").textContent = "Enter your full name.";
+  $("startBtn").disabled = true; $("loginMsg").textContent = "";
+  const local = store.get(doneKey(id));
+  if (local) return showLocked(local);
+  const res = await checkServer(id);
+  $("startBtn").disabled = false;
+  if (res.ok && res.submitted) return showLocked({ id, already: true, receivedAt: res.receivedAt });
+  student = { id, name, startedAt: (store.get(sessionKey)?.id === id && store.get(sessionKey).startedAt) || new Date().toISOString() };
+  store.set(sessionKey, student);
+  openExam();
+}
+
+function openExam() {
+  $("loginView").classList.add("hidden");
+  $("examView").classList.remove("hidden");
+  $("who").textContent = `${student.name} · ${student.id}`;
+  $("configBanner").classList.toggle("hidden", !!SUBMIT_URL);
+  const draft = store.get(draftKey(student.id));
+  $("cells").innerHTML = ""; cells = [];
+  if (draft && draft.cells && draft.cells.length) {
+    draft.cells.forEach(c => addCell(c.code, c.output, c.isError, c.count));
+    $("answer").value = draft.answer || "";
+    runCount = draft.runCount || 0;
+    $("saveState").textContent = "Restored your saved work. Note: Python state was reset, use “Run all”.";
+  } else {
+    STARTER_CELLS.forEach(code => addCell(code));
+  }
+  cells.forEach(c => c.cm.refresh());
+}
+
+function showLocked(info) {
+  ["loginView", "examView"].forEach(v => $(v).classList.add("hidden"));
+  $("lockedView").classList.remove("hidden");
+  $("confirmModal").classList.add("hidden");
+  $("lockedTitle").textContent = info.already ? "Already submitted" : "Submission received";
+  const when = info.receivedAt ? new Date(info.receivedAt).toLocaleString() : "";
+  $("lockedText").textContent = info.already
+    ? `Student ID ${info.id} has already submitted${when ? " (" + when + ")" : ""}. Resubmission is not allowed.`
+    : `Thank you. Your exam (Student ID ${info.id}) was received at ${when}. You may close this page.`;
+  $("who").textContent = info.id || "";
+}
+
+// ---------- Submit ----------
+function buildPayload() {
+  const parts = cells.map((c, i) => ({ i: i + 1, code: c.cm.getValue(), out: c.output || "(cell not run)" }));
+  const code = parts.map(p => `# ===== Cell ${p.i} =====\n${p.code}`).join("\n\n");
+  const output = parts.map(p => `===== Cell ${p.i} =====\n${p.out}`).join("\n");
+  const comment = s => s.split("\n").map(l => "# " + l).join("\n");
+  const fileText =
+`"""
+AI Programming (CB2001103) - Midterm Exercise 4
+Student name: ${student.name}
+Student ID: ${student.id}
+Submitted from the online exam platform: ${new Date().toISOString()}
+"""
+
+${parts.map(p => `# ===== Cell ${p.i} =====\n${p.code}\n\n# ----- output of cell ${p.i} (last run) -----\n${comment(p.out.trimEnd())}`).join("\n\n\n")}
+
+# -----------------------------------------------------------------------------
+# WRITTEN ANSWER
+${comment($("answer").value.trim())}
+`;
+  return {
+    studentId: student.id, name: student.name, startedAt: student.startedAt,
+    code, output, writtenAnswer: $("answer").value.trim(), fileText, runCount,
+    userAgent: navigator.userAgent,
+  };
+}
+
+function openConfirm() {
+  const notRun = cells.filter(c => c.count == null).length;
+  const warn = [];
+  if (notRun) warn.push(`${notRun} cell(s) have not been run.`);
+  if (!$("answer").value.trim()) warn.push("Your written answer is empty.");
+  $("confirmWarn").textContent = warn.join(" ");
+  $("submitMsg").textContent = "";
+  $("confirmSubmit").disabled = false;
+  $("confirmModal").classList.remove("hidden");
+}
+
+async function doSubmit() {
+  if (!SUBMIT_URL) return $("submitMsg").textContent = "Submission server is not configured. Tell the teacher.";
+  saveDraft();
+  $("confirmSubmit").disabled = true; $("cancelSubmit").disabled = true;
+  $("submitMsg").style.color = "var(--muted)"; $("submitMsg").textContent = "Submitting…";
+  try {
+    // text/plain avoids a CORS preflight, which Apps Script does not support
+    const r = await fetch(SUBMIT_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify(buildPayload()) });
+    const res = await r.json();
+    if (res.ok) {
+      const info = { id: student.id, receivedAt: res.receivedAt };
+      store.set(doneKey(student.id), info);
+      localStorage.removeItem(sessionKey);
+      return showLocked(info);
+    }
+    if (res.error === "already_submitted") {
+      const info = { id: student.id, already: true, receivedAt: res.receivedAt };
+      store.set(doneKey(student.id), info);
+      return showLocked(info);
+    }
+    throw new Error(res.message || res.error || "Unknown error");
+  } catch (e) {
+    $("submitMsg").style.color = "var(--err)";
+    $("submitMsg").textContent = "Submission failed: " + e.message + ". Your work is saved; try again or call the teacher.";
+    $("confirmSubmit").disabled = false;
+  } finally {
+    $("cancelSubmit").disabled = false;
+  }
+}
+
+// ---------- Wiring ----------
+$("startBtn").onclick = start;
+$("sname").addEventListener("keydown", e => { if (e.key === "Enter") start(); });
+$("runAllBtn").onclick = () => runCells(cells.slice());
+$("restartBtn").onclick = () => runCells(cells.slice(), true);
+$("addCellBtn").onclick = () => { const c = addCell(); c.cm.focus(); saveDraft(); };
+$("answer").addEventListener("input", scheduleSave);
+$("submitBtn").onclick = openConfirm;
+$("cancelSubmit").onclick = () => $("confirmModal").classList.add("hidden");
+$("confirmSubmit").onclick = doSubmit;
+
+// Resume an open session after a refresh
+(() => {
+  const s = store.get(sessionKey);
+  if (s && s.id && !store.get(doneKey(s.id))) { student = s; openExam(); }
+})();
+</script>
+</body>
+</html>
